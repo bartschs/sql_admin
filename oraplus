@@ -1,0 +1,1220 @@
+#!/bin/ksh
+#
+#   oraplus - call SQL*Plus for connection to different Oracle DBs
+# MODIFIED
+#   31.07.2013 SBartsch - review => Database ETUM / BTUM 13.3B (B-Line)
+#   09.11.2011 SBartsch - review => e3ca*
+#   28.08.2007 SBartsch - review for "secure" selector passwords (ORAPLUS_ORAXSEL) => pca*|aca*
+#   13.10.2006 SBartsch - review for new domain name (permanent => devlab.de.tmo)
+#   28.07.2006 SBartsch - review for new domain name (>= 6.4 devlab.de.tmo)
+#                         remove references to former Databases (QA3.5, QA4.0)
+#   08.03.2006 SBartsch - review for "secure" actor passwords (ORAPLUS_ORAEXE_SECURE)
+#   28.02.2001 SBartsch - created
+#
+
+#set -x
+
+# ------------------------------------------------------------
+#  Check trace to be turned on or off.
+# ------------------------------------------------------------
+if [ "$1" = "-x" ]
+then
+    options="$options -x"
+    set -x
+    shift 1
+fi
+
+# ------------------------------------------------------------
+#  Display abort message on interupt.
+# ------------------------------------------------------------
+trap 'echo "ORA*Plus Aborted!"; exit' 1 2 3 15
+
+# ------------------------------------------------------------
+#  Allow verification/trace to be turned on and off.
+# ------------------------------------------------------------
+case $WATCH_DB_TRACE in
+    T)  set -x ;;
+esac
+
+# ------------------------------------------------------------
+# Store process-id for using in temp file names
+# ------------------------------------------------------------
+id=$$
+
+# ------------------------------------------------------------
+# Determine how to suppress newline with echo command.
+# ------------------------------------------------------------
+case ${N}$C in
+    "") if echo "\c" | grep c >/dev/null 2>&1; then
+            N='-n'
+        else
+            C='\c'
+        fi ;;
+esac
+
+# ------------------------------------------------------------
+# Define all standard private shell functions
+# ------------------------------------------------------------
+
+usage()
+{
+clear
+echo "------------------------------------------------------------------------"
+echo "ORAPLUS:  Runtime options"
+echo "------------------------------------------------------------------------"
+echo >&2 "
+Usage: $scriptname
+
+Action:
+   -?                             : help
+   -help                          : help
+   -db                            : connect [dev|test|prod]
+   -test                          : test mode
+
+Hidden Parameters:
+  (-c|-d       : cron mode|debug mode
+
+E.g.:  $scriptname [-c|-d] -db -dev psasw iv98_support
+
+"
+exit 1
+}
+
+
+do_debug()
+{
+  $debug echo >&2 "DEBUG: $* "
+}
+
+do_log()
+{
+  if [ "$2" = "FORCE" ]; then
+     echo "$1" | tee -a $ORAPLUS_LOG
+  fi
+
+  # dummy echo in order to validate if-statements
+  #echo ""
+  $logmode echo "$1" | tee -a $ORAPLUS_LOG
+}
+
+do_errcheck()
+{
+  if [ ! $? -eq 0 ]; then
+     ORAPLUS_ERR="Y"
+  fi
+}
+
+do_fatal_error()
+{
+do_log "
+$1
+
+Database connection ended up with a fatal error.
+Please see $ORAPLUS_LOG for further information.
+" "FORCE"
+do_log "
+------------------------------------------------------------------------
+End of ORAPLUS [Option=$what] : `date`
+------------------------------------------------------------------------
+" 
+exit 0
+}
+
+
+do_read()
+{
+case $ORAPLUS_DEFAULT in
+    T)  RDVAR=$DEFLT ; echo "$DEFLT" ;;
+    *)  while :
+        do
+            echo $N "[${DEFLT}]: $C"
+            if [ "$1" = "NOECHO" ]; then
+              stty -echo
+            fi
+            read RDVAR
+            if [ "$1" = "NOECHO" ]; then
+              stty echo
+              echo " "
+            fi
+            case $RDVAR in
+                "") if [ "$1" = "NOECHO" ]; then
+                       RDVAR=$2
+                    else
+                       RDVAR=$DEFLT
+                    fi
+                    break
+                    ;;
+                !*) ${SHELL-/bin/sh} ; echo ;;
+                *)  break ;;
+            esac
+        done ;;
+esac
+}
+
+do_execute()
+{
+	script_name="$1"
+	option="$2"
+
+	chmod 750 $script_name
+	$script_name
+
+	if [ "$option" = "REMOVE" ]; then
+           $RM $script_name >> $ORAPLUS_LOG 2>&1
+	fi
+	do_errcheck
+
+}
+
+
+do_remove_file()
+{
+	file_name="$1"
+
+	#$RM "$file_name" 1>> $ORAPLUS_LOG 2>&1
+	do_errcheck
+}
+
+
+do_sqlplus()
+{
+    do_debug $*
+
+    orauser="$1"
+    sepchar="/"
+    orapwd="$2"
+    atchar="@"
+    oradb="$3"
+    #sql_command="$4"
+
+    #connect_sqlplus="${orauser}${orapwd:+$sepchar}${orapwd}${oradb:+$atchar}${oradb}\n"
+    connect_sqlplus="${orauser}${orapwd:+$sepchar}${orapwd}${oradb:+$atchar}${oradb}"
+
+    #do_debug "${connect_sqlplus}${sql_command}"
+    do_debug "${connect_sqlplus}"
+
+    #echo "${connect_sqlplus}" | \
+    #$SQLPLUS >> $ORAPLUS_LOG 2>&1
+
+	$SQLPLUS "${connect_sqlplus}"
+
+}
+
+do_sendmail()
+{
+    do_debug $*
+
+	mailto="$1"
+	mailsubject="$2"
+	mailtext="$3"
+
+    $MAIL -s "$mailsubject" $mailto < $mailtext 1>> $ORAPLUS_LOG 2>&1
+
+    #mailx -s "TEST" $mailto < $mailtext 
+}
+
+do_prompt()
+{
+do_debug $*
+
+if [ ! "$ORAPLUS_ORAPASS" = "" ]; then
+     TMP_ORAPLUS_ORAPASS_NOECHO="****"
+fi
+}
+
+
+do_checkdb()
+{
+
+    do_log "
+do_checkdb info...
+ORAPLUS_TARGET_PROD=${ORAPLUS_TARGET_PROD}
+  (Please see $ORAPLUS_LOG for further information)
+"
+
+      # `cat < \${ORAPLUS_ADMDIR}/xxx.prod`)
+      # "${ORAPLUS_TARGET_PROD}")
+   case "$TMP_ORAPLUS_ORADBNAME" in
+        psa*|pca*)
+             # Database Production
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_PROD}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "iv98_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "bartschs_s") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXSEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  ;;
+			      *) 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			 esac
+             ;;
+        ksa*|msa*|kca*|mca*|xca*|yca*)
+             # Database P3
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_P3}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "xspr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="spr${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbr${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbm_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbm${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbi${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xswi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="swi${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbc_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbc${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbx_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbx${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrbp_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbp${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xxhs_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="xhs${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xbpd_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="bpd${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xbpd01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="bpd01r${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xcds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="cds${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xcds01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="cds01r${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xpds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="pds${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xpds01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="pds01r${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xglv_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="glv${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xglv01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="glv01r${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xrpl_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rpl${ORAPLUS_ORAXP3}"
+				                  ;;
+
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXSPRP3}"
+				                  ;;
+			      "rbr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rbm_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rbi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "usm_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "swi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rbc_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rbx_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rbp_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "xhs_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "bpd_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "bpd01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "cds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "cds01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "pds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "pds01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "glv_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "glv01r_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "rpl_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3}"
+				                  ;;
+			      "iv98_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "bartschs_s") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXSEL}"
+				                  ;;
+			      "bartschs_p3") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXP3EXE}"
+				                  ;;
+			      "rating"|"billing") 
+				                  #TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAP3EXE}"
+				                  ;;
+			      *) 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			 esac
+             ;;
+        aca*|sca*)
+             # Database QA 
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_QA}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="spr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbm_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbm_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbc_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbc_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbx_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbx_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbp_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbp_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "xhs_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="xhs_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbi_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "bpd_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="bpd_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "cds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="cds_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "pds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="pds_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "glv_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="glv_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "swi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="swi_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "iv98_support") 
+				                  #TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  #;;
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      "bartschs_s") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXSEL}"
+				                  ;;
+			    # "rating"|"billing") 
+				#                 TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				#                 ;;
+			      "rating"|"billing") 
+                                  case "$TMP_ORAPLUS_ORADBNAME" in
+                                       *71*|*72*|*74*|*81*)
+				                              TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXQA}"
+				                              ;;
+                                          *) 
+				                              TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                              ;;
+                                  esac
+                                  ;;
+			      "iv98_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			 esac
+             ;;
+        qca*|bca*)
+             # Database ETUM / BTUM 13.3B
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV_NEW}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="spr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbm_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbm_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbc_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbc_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbx_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbx_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbp_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbp_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "xhs_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="xhs_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "rbi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="rbi_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "bpd_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="bpd_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "cds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="cds_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "pds_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="pds_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "glv_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="glv_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "swi_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="swi_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "iv98_support") 
+				                  #TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  #;;
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      "bartschs_s") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAXSEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  ;;
+			      "iv98_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			 esac
+             ;;
+        acre1*|acb*)
+             # Database T+A XOXi
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_QA}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  #TMP_ORAPLUS_ORADBPASS="spr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "cre_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  ;;
+			      "cre_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			 esac
+             ;;
+        pcre1*)
+             # Database PROD XOXi
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_PROD}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  #TMP_ORAPLUS_ORADBPASS="spr_${ORAPLUS_ORAX50}"
+				                  ;;
+			      "cre_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  #TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  ;;
+			      "cre_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			 esac
+             ;;
+        tca*)
+             # Database QA DB-internal 
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_QA}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			      "iv98_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  #TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			      "iv98_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			 esac
+             ;;
+        e1cre1*|e2cre1*|ccre1*|e1cb*|ccb*)
+             # Database DEV DB-internal + XOXi
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV}"
+			 case "$TMP_ORAPLUS_ORADBUSER" in
+			      "spr_schema") 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			      "cre_support") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				                  ;;
+			      "rating"|"billing") 
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE}"
+				                  ;;
+			      "cre_inst") 
+                                  #  Get password of ORA*Plus DB user 
+                                  echo " "
+                                  echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                  DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				                  TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				                  ;;
+			      *) 
+				                  TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                  ;;
+			 esac
+             ;;
+        e1ca*|e2ca*|e3ca*|ica*|e1re*)
+             # Database DEV DB-internal + XOXi
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV_NEW}"
+             #TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV}"
+
+             case "$TMP_ORAPLUS_ORADBNAME" in
+                  *04*|*11*)
+
+			        case "$TMP_ORAPLUS_ORADBUSER" in
+			             "spr_schema") 
+				                         TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         ;;
+			             "iv98_support") 
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORASEL}"
+				                         ;;
+			             "rating"|"billing") 
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORAEXE}"
+				                         #TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         ;;
+			             "iv98_inst") 
+                                         #  Get password of ORA*Plus DB user 
+                                         echo " "
+                                         echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                         DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+					       			     do_read "NOECHO" "${DBTOOL_ORADBPASS}"; DBTOOL_ORADBPASS=$RDVAR
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORADBPASS}"
+				                         ;;
+			             *) 
+				                         TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         ;;
+                    esac
+				    ;;
+			      *) 
+			        case "$TMP_ORAPLUS_ORADBUSER" in
+			             "spr_schema") 
+				                         TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "iv98_support") 
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORASEL}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "rating"|"billing") 
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORAEXE}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "iv98_inst") 
+                                         #  Get password of ORA*Plus DB user 
+                                         echo " "
+                                         echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                         DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								         do_read "NOECHO" "${DBTOOL_ORADBPASS}"; DBTOOL_ORADBPASS=$RDVAR
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORADBPASS}"
+				                         ;;
+			             *) 
+				                         TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+                    esac
+				    ;;
+			 esac
+             ;;
+        cca*|cre*)
+             # Database DEV Application + XOXi
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV_NEW}"
+             #TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN_DEV}"
+
+             case "$TMP_ORAPLUS_ORADBNAME" in
+                  *04*|*11*)
+
+  			 		case "$TMP_ORAPLUS_ORADBUSER" in
+			 		     "spr_schema") 
+				   		               TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASPR}"
+				       		           ;;
+					      "iv98_support") 
+				   		               TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASEL}"
+				       		           ;;
+			     		 "rating"|"billing") 
+				       		           TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE_SECURE}"
+				           		       ;;
+			  		    "iv98_inst") 
+                   		               #  Get password of ORA*Plus DB user 
+                       		           echo " "
+                           		       echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                              		    DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+										  do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+				               		   TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORADBPASS}"
+				               		   ;;
+			    		  *) 
+				       		           TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				           		       ;;
+			 		esac
+             		;;
+
+			      *) 
+			        case "$TMP_ORAPLUS_ORADBUSER" in
+			             "spr_schema") 
+				                         TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORASPR}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "iv98_support") 
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORASEL}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "rating"|"billing") 
+				                         TMP_ORAPLUS_ORADBPASS="${ORAPLUS_ORAEXE_SECURE}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+			             "iv98_inst") 
+                                         #  Get password of ORA*Plus DB user 
+                                         echo " "
+                                         echo $N "Enter password for DB user <$TMP_ORAPLUS_ORADBUSER> $N"
+                                         DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO} 
+								         do_read "NOECHO" "${DBTOOL_ORADBPASS}"; DBTOOL_ORADBPASS=$RDVAR
+				                         TMP_ORAPLUS_ORADBPASS="${DBTOOL_ORADBPASS}"
+				                         ;;
+			             *) 
+				                         TMP_ORAPLUS_ORADBPASS="${TMP_ORAPLUS_ORADBUSER}"
+				                         TMP_ORAPLUS_ORADBPASS="$(echo $TMP_ORAPLUS_ORADBPASS | tr '[:lower:]' '[:upper:]')"
+				                         ;;
+                    esac
+				    ;;
+			 esac
+             ;;
+        *)
+             TMP_ORAPLUS_ORADOMAIN="${ORAPLUS_ORADOMAIN}"
+             ;;
+   esac
+
+   do_log " 
+Connection info: 
+ TMP_ORAPLUS_ORADBUSER -> $TMP_ORAPLUS_ORADBUSER 
+ TMP_ORAPLUS_ORADBPASS -> $TMP_ORAPLUS_ORADBPASS 
+ TMP_ORAPLUS_ORADBNAME -> $TMP_ORAPLUS_ORADBNAME 
+ TMP_ORAPLUS_ORADOMAIN -> $TMP_ORAPLUS_ORADOMAIN 
+  (Please see $ORAPLUS_LOG for further information)
+"
+}
+
+do_connect()
+{
+    do_debug $*
+
+	oradbuser="$1"
+	oradbpass="$2"
+	oradbname="$3"
+	oradomain="$4"
+	mailto="$3"
+	currtime=`date +"%T"`
+	outfile="$ORAPLUS_TMPDIR/$TMP_ORAPLUS_OUTFILE"
+ 
+    do_log "
+Logging connection info...
+  (Please see $ORAPLUS_LOG for further information)
+"
+
+    #do_remove_file "$outfile"
+
+    do_log "DB-Name -> $oradbname (-> $outfile)"
+
+    do_sqlplus "$oradbuser" "$oradbpass" "$oradbname.$oradomain" 
+
+    #if [ -s "$outfile" ];  then
+    #   do_sendmail "$mailto" "ORA*Plus: Replication Error -> $dbname  ( $currtime - $interval )" "$outfile"
+    #fi
+
+}
+
+do_test()
+{
+    do_debug $*
+
+	oradbuser="$1"
+	oradbpass="$2"
+	oradbname="$3"
+	oradomain="$4"
+	mailto="$5"
+	currtime=`date +"%T"`
+	outfile="$ORAPLUS_TMPDIR/$TMP_ORAPLUS_OUTFILE"
+	
+    do_log "
+Testing Ora*Plus...
+  (Please see $ORAPLUS_LOG for further information)
+"
+ 
+    do_remove_file "$outfile"
+		
+    for dbname in $oradbname
+    do
+        do_log "DB-Name -> $dbname (-> $outfile)"
+
+        do_sqlplus "$oradbuser" "$oradbpass" "$dbname.$oradomain" \
+                   "@$ORAPLUS_ADMDIR/oraplus_test $outfile"
+
+        if [ -s "$outfile" ];  then
+           do_sendmail "$mailto" "ORA*Plus: Test -> $dbname  ( $currtime )" "$outfile"
+        fi
+    done
+}
+
+
+# ------------------------------------------------------------
+# evaluate commandline input
+# ------------------------------------------------------------
+
+#exec 2> /tmp/oraplus_log$$.log
+#set -x
+
+debug=":"
+cronmode="N"
+logmode=":"
+
+# evaluate options
+case "$1" in
+     "-c")
+           options="$options -c"
+           cronmode="Y"
+           shift 1
+		   ;;
+     "-d")
+           options="$options -d"
+           debug=""
+           shift 1
+		   ;;
+     "-l")
+           options="$options -ld"
+           logmode=""
+           shift 1
+		   ;;
+     "-ld")
+           options="$options -ld"
+           debug=""
+           logmode=""
+           shift 1
+		   ;;
+     *)
+		   ;;
+esac
+
+scriptname=`basename $0`
+
+# evaluate input parameters
+case $1 in
+    "")      echo "--> 1st parameter is missing !!"
+             usage
+             ;;
+    "?"|"-?"|"-h"|"-help")
+             usage
+             ;;
+    "-db") 
+             act="DB"
+             for i in $*
+             do
+                 case $2 in
+                   -dev)    what=DEV;;
+                   -test)   what=TEST;;
+                   -prod)   what=PROD;;
+                   *)       echo "--> Second parameter not correct !!"
+                            usage;;
+                 esac
+             done
+
+             if [ "$what" = "DEV" ]
+             then
+                #if [ "$6" = "" ]
+                #then
+                #   echo "--> Using default DB Domain !!"
+                #   #usage
+                #else
+                   input_dbname="$3"
+                   input_dbuser="$4"
+                   input_dbpass="$5"
+                   input_domain="bn.detemobil.de"
+                #fi
+             fi
+
+             if [ "$what" = "TEST" ]
+             then
+                if [ "$3" = "" ]
+                then
+                   echo "--> User name missing !!"
+                   usage
+                else
+                   input_dbname="$3"
+                   input_dbuser="$4"
+                   input_dbpass="$5"
+                   input_domain="$6"
+                fi
+             fi
+
+             if [ "$what" = "PROD" ]
+             then
+                #if [ "$5" = "" ]
+                #then
+                #   echo "--> Using default DB Domain !!"
+                #   #usage
+                #else
+                   input_dbname="$3"
+                   input_dbuser="$4"
+                   input_dbpass="$5"
+                   input_domain="mspr.detemobil.de"
+                #fi
+             fi
+
+             ;; 
+    "-test") 
+             act="TEST"
+             input_dbname="$2"
+             input_dbuser="$3"
+
+             #  Get password of ORA*Plus DB user 
+             echo " "
+             echo $N "Enter password for DB user <$input_dbuser> $N"
+             DEFLT=${TMP_ORAPLUS_ORADBPASS_NOECHO}; do_read "NOECHO" "${ORAPLUS_ORADBPASS}"; ORAPLUS_ORADBPASS=$RDVAR
+
+             input_dbpass="${ORAPLUS_ORADBPASS}"
+             input_domain="$5"
+             ;;
+    *)   
+             act="DB"
+             input_dbname="$1"
+             input_dbuser="$2"
+             ;;
+esac
+
+$debug clear
+
+# !! reminder: $ORAPLUS_LOG not yet set !!
+
+# ------------------------------------------------------------
+# echo banner on stdout only 
+# ------------------------------------------------------------
+do_log "
+--------------------------------------------------------------------------------
+ORA*Plus $ORAPLUS_VERSION [Option=$act $what] : `date`
+--------------------------------------------------------------------------------
+"
+
+# ------------------------------------------------------------
+# enable logging
+# ------------------------------------------------------------
+ORAPLUS_LOG="/tmp/oraplus${id}.log"
+
+# ------------------------------------------------------------
+# save temp logfile setting for later logfile switch
+# ------------------------------------------------------------
+TMP_LOG=$ORAPLUS_LOG
+
+# ------------------------------------------------------------
+# start ORA*Plus
+# ------------------------------------------------------------
+
+$logmode echo "
+--------------------------------------------------------------------------------
+ORA*Plus $ORAPLUS_VERSION [Option=$act $what] : `date`
+--------------------------------------------------------------------------------
+" >>  $ORAPLUS_LOG 2>&1
+
+# ------------------------------------------------------------
+#  Get temporary HOSTNAME info 
+# ------------------------------------------------------------
+
+TMP_ORAPLUS_HOSTNAME=`uname -a | awk  '{print $2}'`
+
+# ------------------------------------------------------------
+#  Get temporary DBNAME info (list of DB Names) / temporary control interval 
+# ------------------------------------------------------------
+
+TMP_ORAPLUS_ORADBUSER="$input_dbuser"
+TMP_ORAPLUS_ORADBPASS="$input_dbpass"
+TMP_ORAPLUS_ORADBNAME="$input_dbname"
+TMP_ORAPLUS_ORADOMAIN="$input_domain"
+
+# ------------------------------------------------------------
+#  Check if configuration file is present
+# ------------------------------------------------------------
+
+#ORAPLUS_ENVDIR="/users/dxcasi/user3/bartschs"
+ORAPLUS_ENVDIR="$HOME"
+ORAPLUS_ENVFILE=".oraplus_env"
+#echo "$HOME/$ORAPLUS_ENVFILE"
+
+if [ ! -f "$ORAPLUS_ENVDIR/$ORAPLUS_ENVFILE" ]; then
+   #
+   #  Get name of default environment directory.
+   #
+   echo ""
+   echo $N "Enter full pathname for the configuration file = $N"
+   DEFLT="$ORAPLUS_ENVDIR"; do_read; ORAPLUS_ENVDIR=$RDVAR
+   if [ ! -r "$ORAPLUS_ENVDIR/$ORAPLUS_ENVFILE" ]; then
+      echo ""
+      do_log "Configuration file not found in $ORAPLUS_ENVDIR !" 
+       
+      echo "Install configuration file, then restart ORA*Plus."
+      do_log "Exiting ORA*Plus."
+      exit 1
+   fi
+   RESET_VARS="Y"
+   WRITE_ENVFILE="Y"
+else
+   #
+   #  Custom environment file found.
+   #
+   #ORAPLUS_ENVDIR="$HOME/bin"
+   ORAPLUS_ENVDIR="$HOME"
+   if [ ! -w "$ORAPLUS_ENVDIR/$ORAPLUS_ENVFILE" ]; then
+      echo ""
+      do_log "Configuration file not found in directory -> $ORAPLUS_ENVDIR !"
+      echo $N "Enter full pathname for the configuration file = $N"
+      DEFLT="$ORAPLUS_ENVDIR"; do_read; ORAPLUS_ENVDIR=$RDVAR
+      if [ ! -r "$ORAPLUS_ENVDIR/$ORAPLUS_ENVFILE" ]; then
+         echo ""
+         do_log "Configuration file not found in directory -> $ORAPLUS_ENVDIR !" 
+         echo "Provide configuration file, then restart ORA*Plus."
+	 	 do_log "Exiting ORA*Plus."
+         exit 1
+      fi
+   fi
+   RESET_VARS="N"
+   WRITE_ENVFILE="N"
+fi
+
+
+# --------------------------------------------------------------------------
+# set up ORACLE/ORA*Plus environment
+# --------------------------------------------------------------------------
+
+. $ORAPLUS_ENVDIR/.oraplus_env
+
+# ------------------------------------------------------------
+# Prompt/Check for all private environment variables
+# ------------------------------------------------------------
+
+if [ ! "$cronmode" = "Y" ]; then
+   do_prompt
+fi
+
+# ------------------------------------------------------------
+# switch logfile (from tmp filename to selected log directory)
+# - due to the fact that before this step
+#   we dont't have yet all the necessary info
+# ------------------------------------------------------------
+ORAPLUS_LOG="$ORAPLUS_LOGDIR/oraplus${id}.log"
+cat < $TMP_LOG >> $ORAPLUS_LOG 2>&1
+rm "$TMP_LOG" >> $ORAPLUS_LOG 2>&1
+
+# ------------------------------------------------------------
+# set filename for mail input file
+# ------------------------------------------------------------
+
+TMP_ORAPLUS_OUTFILE="$ORAPLUS_OUTFILE${id}.lst"
+
+do_log "
+--------------------------------------------------------------------------------
+Logging information will be written to: \n $ORAPLUS_LOG
+Output  information will be written to: \n $TMP_ORAPLUS_OUTFILE
+--------------------------------------------------------------------------------
+"
+
+# ------------------------------------------------------------
+# If ORAPLUS_LOG is not set, then send output to /dev/null.
+# ------------------------------------------------------------
+if [ "$ORAPLUS_LOG" = "" ]; then
+  ORAPLUS_LOG="/dev/null"
+  echo ""
+  echo "Note:  To have diagnostic output from your operations logged, set the"
+  echo "       environment or export variable ORAPLUS_LOG " 
+  echo "       to a file name to maintain the output."
+fi
+
+# =========================================================================
+# begin error logging
+# =========================================================================
+
+do_log "
+--------------------------------------------------------------------------------
+Begin ORA*Plus
+--------------------------------------------------------------------------------
+"
+
+# ------------------------------------------------------------
+# Check DB connect data (Password, Domain)
+# ------------------------------------------------------------
+
+do_checkdb "${TMP_ORAPLUS_ORADBUSER}" \
+           "${TMP_ORAPLUS_ORADBPASS}" \
+           "${TMP_ORAPLUS_ORADBNAME}" \
+           "${TMP_ORAPLUS_ORADOMAIN}" 
+
+# ------------------------------------------------------------
+# Test mode
+# ------------------------------------------------------------
+
+if [ "$act" = "TEST" ]; then
+
+   do_test "${TMP_ORAPLUS_ORADBUSER:="$ORAPLUS_ORADBUSER"}" \
+           "${TMP_ORAPLUS_ORADBPASS:="$ORAPLUS_ORADBPASS"}" \
+           "${TMP_ORAPLUS_ORADBNAME:="$ORAPLUS_ORADBNAME"}" \
+           "${TMP_ORAPLUS_ORADOMAIN:="$ORAPLUS_ORADOMAIN"}" \
+           "${ORAPLUS_MAILTO_DB:="$ORAPLUS_MAILTO_DB"}" 
+fi
+
+# ------------------------------------------------------------
+# Connect mode
+# ------------------------------------------------------------
+
+# connect DB
+#if [ "$act" = "DB" -a "$what" = "DEV" ]; then
+if [ "$act" = "DB" ]; then
+
+   do_connect "${TMP_ORAPLUS_ORADBUSER:="$ORAPLUS_ORADBUSER"}" \
+              "${TMP_ORAPLUS_ORADBPASS:="$ORAPLUS_ORADBPASS"}" \
+              "${TMP_ORAPLUS_ORADBNAME:="$ORAPLUS_ORADBNAME"}" \
+              "${TMP_ORAPLUS_ORADOMAIN:="$ORAPLUS_ORADOMAIN"}" 
+fi
+
+# ------------------------------------------------------------
+# check for runtime error
+# ------------------------------------------------------------
+
+if [ ! "$ORAPLUS_ERR" = "Y" ]; then
+   do_log "
+Logging completed.
+Please see $ORAPLUS_LOG for further information.
+"
+else
+   do_log "
+Logging completed with errors/warnings.
+Please see $ORAPLUS_LOG for further information.
+"
+fi
+
+do_log "
+--------------------------------------------------------------------------------
+End of ORA*Plus [Option=$act $what] : `date`
+--------------------------------------------------------------------------------
+"
+$debug echo  "$ORAPLUS_LOG"
+
+if [ ! -s "$ORAPLUS_LOG" -a "$logmode" = ":" ];  then
+   rm "$ORAPLUS_LOG"
+fi
+
+exit 0
+
+# ------------------------------------------------------------
+# end of file
+# ------------------------------------------------------------
+
