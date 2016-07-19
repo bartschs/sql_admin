@@ -1,0 +1,17 @@
+# In dieser Datei wird der Unix-Defaulteditor definiert. Programme nutzen den hier definierten
+# Editor um Datein bearbeiten zu koennen. Beispiel: cleartool edcs ruft den hier definierten Editor auf
+# Nur einer der folgenden Eintraege darf aktiviert sein
+
+EDITOR=vi		# Der Standard; klein, stark, schwarz
+
+#
+# Die folgenden Editoren sind nur verfuegbar, wenn die T-Mobil freeware aktiviert wurde
+# Wird auf der Umgebung der gewaehlte Editor nicht gefunden wird der Eintrag deaktiviert
+#
+
+#EDITOR=vim		# sehr gut, textbasiert
+#EDITOR=gvim		# sehr gut, funktioniert sowohl im Grafik als auch im Textmodus
+#EDITOR=emacs         # sehr gut, funktioniert sowohl im Grafik als auch im Textmodus
+#EDITOR=xemacs        # sehr gut, funktioniert sowohl im Grafik als auch im Textmodus
+#EDITOR=nedit		# einfach zu bedienen, laeuft aber nur im Grafikmodus!
+#EDITOR=kedit		# einfach zu bedienen, laeuft aber nur im Grafikmodus!

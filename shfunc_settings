@@ -1,0 +1,418 @@
+#
+# @(#).shfunc 1.0 06.03.92 codework/us
+#
+# NAME
+#       .shfunc - various useful, private SHell FUNCtions
+# SYNOPSIS
+#       . .shfunc
+# DESCRIPTION
+#       defines various useful shell functions;
+#       since they aren't exported, this script is for being
+#       called in a sub-shell if desired;
+# MODIFIED
+#       29.07.94   SBartsch  -  last access for modification
+#       06.03.92   USachse   -  made it  
+#
+
+#set -x
+
+myenv() {
+set | sort |pg
+}
+
+mypath() {
+echo $PATH | gawk -v RS=":" '{printf $0 "\n"}'
+}
+
+fin() {
+jobs; exit
+}
+
+co() {
+  /usr/bin/LPI/co $*
+}
+
+l() {
+  view $*
+}
+ 
+# l() {
+#   pg $*
+# }
+#  
+
+# ---- private functions ----
+
+T() {
+set `date`
+echo $4
+}
+
+me() {
+  ps -fu $LOGNAME
+}
+
+mypid() {
+  ps -ef |grep $LOGNAME |awk '{print $2}'
+}
+
+killme() {
+  kill -9 `ps -ef |grep $LOGNAME |awk '{print $2}'`
+}
+
+logout() {
+  echo "cd $PWD" > $HOME/.relogin
+  exit
+}
+
+checkora() {
+  ps -ef |fgrep ora
+}
+
+checkall() {
+  ps -ef |pg
+}
+
+showpid() {
+  ps -ef |grep $* |awk '{print $2}'
+}
+
+killpid() {
+  kill -9 `ps -ef |grep $* |awk '{print $2}'`
+}
+
+subawk() {
+  awk '{printf("%.80s\n", substr($0,1,80))}' $1 > $2
+}
+
+sublist() {
+  awk '{printf("%.80s\n", substr($0,31,80))}' $1 > $2
+}
+
+hidden(){
+  what="$1"
+  for i in `find . -name \.[a-zA-Z0-9]*`
+  do
+  fgrep -il $what $i
+  done
+}
+
+fsearch() {
+  fpref="*"
+  param2="$2"
+  flist=${param2:=$fpref}
+  param1="$1"
+  pattern=$param1
+  if [ "$param1" = "" -o "$param1" = "?" -o "$param1" = "-?" ]    
+   then
+     case "$1" in
+     "")  echo "--> !! Search pattern is missing !!"
+     esac
+     echo "--> Usage:    fsearch pattern filelist"
+     echo "--> Example:  fsearch 'case dictionary' '*.txt'"
+   else
+     echo "Searching for pattern <$pattern> in file list <$flist> !! "
+     find . -name "$flist" -exec fgrep -il "$pattern" {} \; |pg
+  fi
+}
+
+fchange() {
+param1="$1"
+param2="$2"
+param3="$3"
+extpref="*"
+flist=${param3:=$extpref}
+sedfile=$param2
+if [ "$param1" = "" -o "$param1" = "?" -o "$param1" = "-?" ]
+ then
+   case "$param1" in
+   "") echo "--> !! option (-e|-f) is missing !!" ;;
+   esac
+   echo "--> Usage:    change -f sedfile filelist"
+   echo "--> Usage:    change -e regexpr filelist"
+   echo "--> Example:  change -e '1,\$s/HELLO/WORLD/g' '*.txt'"
+ else
+   if [ "$param1" = "-e" -o "$param1" = "-f"  ]
+    then
+      case "$param1" in
+      "-e")
+        echo "Change pattern <$sedfile> for file list <$flist> !! "
+        for i in `find . -name "$flist" -print`
+        do
+         # sed -e "$sedfile"  `basename $i` | tee `basename $i`
+         filename=`basename $i`
+         sed -e "$sedfile"  $filename  > $filename.tmp
+         mv $filename.tmp $filename
+        done
+        ;;
+      "-f")
+        echo "Change pattern from <$sedfile> for file list <$flist> !! "
+        for i in `find . -name "$flist" -print`
+        do
+         # sed -f $sedfile  `basename $i` | tee `basename $i`
+         filename=`basename $i`
+         sed -f "$sedfile"  $filename  > $filename.tmp
+         mv $filename.tmp $filename
+        done
+        ;;
+      esac
+     else
+       echo "--> !! option (-e|-f) is missing or incorrect !!"
+   fi
+fi
+}
+
+# --- optionally set SHELL DEBUG on/off ---
+debug_on() {
+SHELL_DEBUG="T"; export SHELL_DEBUG
+echo "SHELL_DEBUG activated"
+}
+
+debug_off() {
+SHELL_DEBUG=""; export SHELL_DEBUG
+echo "SHELL_DEBUG suppressed"
+}
+
+# --- IV98 DB development ---
+sqp() {
+  dbpref="eIV988"
+  uppref="spr_schema/spr_schema"
+  param1="$1"
+  param2="$2"
+  dbname=${param1:=$dbpref}
+  unpw=${param2:=$uppref}
+  sqlplus $unpw@$dbname
+}
+
+# --- start SQL*Plus as user 'SYSTEM' ---
+sysplus() {
+sqlplus system/`eval eval echo '\$'PSWD\$ORACLE_SID`  
+}
+
+# --- optionally change ORACLE_SID ---
+orasid() {
+  param1="$1"
+  chgsid=${param1:="$ORACLE_SID"}
+  ORACLE_SID=$chgsid
+  export ORACLE_SID
+  echo "ORACLE_SID --> $ORACLE_SID"
+}
+
+# --- optionally change ORACLE_SID ---
+orahome() {
+  param1="$1"
+  chghome=${param1:="$ORACLE_HOME"}
+  ORACLE_HOME=$chghome
+  export ORACLE_HOME
+  echo "ORACLE_HOME --> $ORACLE_HOME"
+}
+
+# functions for fast Change Directory
+
+cdlbin() {
+  cd /usr/local/bin
+  pwd
+}
+
+cdtmp() {
+  case $1 in
+    ".")     
+             cd ../tmp
+             ;;
+    "-g")
+             cd $TMP
+             ;;
+    "-l") 
+             cd $HOME/tmp
+             ;;
+    *)       
+             cd $TMP
+             ;;
+  esac
+  pwd
+}
+
+cdcore() {
+  srcdirpref="rbs"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  case "$srcdir" in
+  "bpd01r") 
+           coredir="bp1"
+           ;;
+  "cds01r") 
+           coredir="cd1"
+           ;;
+  "glv01r") 
+           coredir="gl1"
+           ;;
+  "pds01r") 
+           coredir="pd1"
+           ;;
+  *)    
+           coredir="$srcdir"
+           ;;
+  esac
+  cd /vobs/dma_source/"$coredir"_core/db/$srcdir/db
+  pwd
+}
+
+cdsrc50() {
+  srcdirpref="rbs"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/dma_source/"$srcdir"_core/db/$srcdir/db
+  pwd
+}
+
+cdsrc() {
+  srcdirpref="rbs"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/com_source/datenman/db-admin/scripts/$srcdir/db
+  pwd
+}
+
+cdbld() {
+  srcdirpref="rbs"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/com_source/datenman/db-admin/build/$srcdir
+  pwd
+}
+
+cdke() {
+  srcdirpref="rat"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/rbi_source/$srcdir/db/vo_sp
+  pwd
+}
+
+cdbil() {
+  srcdirpref="bil_apps"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/bil_source/$srcdir/db/vo_sp
+  pwd
+}
+
+cdrat() {
+  srcdirpref="rat"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd /vobs/rbi_source/$srcdir/db/vo_sp
+  pwd
+}
+
+
+cdx() {
+  srcdirpref="work"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd $HOME/tools/transfer/$srcdir
+  pwd
+}
+
+cdbill() {
+  cd /vobs/rabi_source/billing/src/database
+  pwd
+}
+
+cdw() {
+  subdirpref="rbs"
+  srcdirpref="carmen"
+  param1="$1"
+  param2="$2"
+  subdir=${param1:=$subdirpref}
+  srcdir=${param2:=$srcdirpref}
+  cd $HOME/$srcdir/$subdir
+  pwd
+}
+
+cdtools() {
+  srcdirpref="sql"
+  param1="$1"
+  srcdir=${param1:=$srcdirpref}
+  cd $HOME/tools/$srcdir
+  pwd
+}
+
+# ping() {
+#   /etc/ping ${*} 
+# } 
+
+pman()
+{
+  man $1|pg
+}
+
+# global functions usually defined in /etc/profile;
+# located here to be automatically executed in every subshell;
+
+la() {
+/bin/ls -Ca $*
+}
+
+lf() {
+/bin/ls -CF $*
+}
+
+li() {
+/bin/ls -li $* 
+}
+
+ll() {
+/bin/ls -l $*
+}
+
+ls() {
+/bin/ls -C $*
+}
+
+lt() {
+/bin/ls -ltR $*
+}
+
+ltr() {
+/bin/ls -ltr $*
+}
+
+# cleartool functions
+
+ctfind() {
+cleartool find -all -element '{lbtype_sub($1)}' -print
+}
+
+alias ct='cleartool'
+alias co='cleartool co -nc'
+alias ci='cleartool ci -nc'
+alias unco='cleartool unco'
+alias ctdiff='cleartool diff -ser'
+alias ctchmod='cleartool protect -chmod'
+alias log='cleartool lshistory'
+alias setview='exec cleartool setview -login bartschs_ux'
+alias setviewIR1='exec cleartool setview -login bartschs_IV98-IR1_ux'
+alias setview05='exec cleartool setview -login bartschs_IV98-0.5_ux'
+alias setview10='exec cleartool setview -login bartschs_IV98-1.0_ux'
+alias setview25='exec cleartool setview -login bartschs_IV98-2.5_ux'
+alias setview30='exec cleartool setview -login bartschs_IV98-3.0_ux'
+alias setview35x='exec cleartool setview -login bartschs_rel35_ux'
+alias setview40x='exec cleartool setview -login bartschs_rel40_ux'
+alias setview402='exec cleartool setview -login bartschs_fix402_ux'
+alias setview35='exec cleartool setview -login bartschs_fix351_ux'
+alias setview40='exec cleartool setview -login bartschs_fix401_ux'
+alias setview41='exec cleartool setview -login bartschs_rel41_ux'
+alias setview410='exec cleartool setview -login bartschs_rel410_ux'
+alias setview50='exec cleartool setview -login bartschs_rel50_ux'
+alias setview55='exec cleartool setview -login bartschs_rel55_ux'
+alias setview60par='exec cleartool setview -login bartschs_rel60_par_ux'
+alias setview60fix='exec cleartool setview -login bartschs_rel60_fix_ux'
+#alias setview65='exec cleartool setview -login bartschs_rel65_ux'
+alias setview65par='exec cleartool setview -login bartschs_rel65_par_ux'
+alias setview65fix='exec cleartool setview -login bartschs_rel65_fix_ux'
+alias setview65sunos='exec cleartool setview -login bartschs_sunos_rel65_ux'
+alias setview70='exec cleartool setview -login bartschs_rel70_ux'
+#alias setview35='exec cleartool setview -login bartschs_rel35_ux'
+alias ctls='cleartool lsco -all -me'
+

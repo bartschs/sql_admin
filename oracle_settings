@@ -1,0 +1,17 @@
+# In dieser Datei kann die Default-Einstellung fuer Oracle veraendert werden.
+#
+# Die Syntax ist wie folgt:
+#
+# SwitchOracle Version Maschine(n)
+#
+# SwitchOracle 8.1.7 dxcss1 dxcasi dxcasx
+#
+# oder 
+#
+# SwitchOracle 8.1.7 dxcss1
+#
+# Sofern die Oracle-version auf der Maschine existiert werden alle noetigen Aenderungen 
+# an den Oracle-Environmentvariablen durchgefuehrt.
+# 
+# Auf Clustersystemen wird der clusteralias ausgewertet, d.h. der Servicename des Clusters
+

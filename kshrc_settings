@@ -1,0 +1,154 @@
+# In dieser Datei werden Environmentvariablen oder aehnliches fuer den persoenlichen
+# Usercontext definiert. Dieses Skript von  der ksh gesourced.
+# Hier sollten nur ksh-spezifische Eintraege erfolgen, alles andere gehoert in die
+# profile Datei
+# Ein Beispiel, was hier hingehoert ist das setzen des ksh-Prompt oder die Neudefinition
+# der Variable PROMPT_COMMAND wenn die Defaulteinstellungen nicht ausreichen/nicht gefallen
+#
+# Weiterhin sollte man sich fuer einen Edit-Mode fuer die commandline entscheiden
+#
+# set -o vi
+#
+# ermoeglicht Commandline-Editing mit vi-Tastenkombinationen
+#
+# set -o emacs 
+#
+# ermoeglicht emacs-Tastenkombinationen
+
+# set -x
+
+# set command line editing keys for 'emacs' Option
+set -o emacs
+
+xtitle () 
+{ 
+  echo -n -e "\033]0;$*\007"
+}
+
+set_term_info() {
+  if [ "$OS" = "OSF1" ]; then
+      stty dec
+      tset -I -Q
+  fi
+}
+
+get_host_info() {
+  set `uname -a`
+  TMP_HOST="`basename $2 .bn.DeTeMobil.de`"
+  TMP_HOST="`basename $TMP_HOST .bn.DeTemobil.de`"
+  TMP_HOST="`basename $TMP_HOST .bn.detemobil.de`"
+  TMP_HOST="`basename $TMP_HOST .devlab.de.tmo`"
+  
+ #if [ "x$TERM" = "xxterm" ]; then
+ #  echo "\033]0;$USER@$TMP_HOST\007"
+ #else
+ #  echo "\033]0;$TERM\007"
+ #fi
+}
+
+set_cluster_alias() {
+  if [ -z "$CLUSTERALIAS" ]; then
+      CLUSTERALIAS=$HOSTNAME
+  fi
+  if [ "x$TERM" = "xxterm" ]; then
+      if [ "$HOSTNAME" = "$CLUSTERALIAS" ]; then
+              export PROMPT_COMMAND="xtitle \$USER@\$HOSTNAME  `basename
+\"$CLEARCASE_ROOT\"` "
+        else
+                export PROMPT_COMMAND="xtitle
+\$USER@\$CLUSTERALIAS\(\$HOSTNAME\)  `basename \"$CLEARCASE_ROOT\"` "
+        fi
+  fi
+  PS1='\u@$CLUSTERALIAS{\w} '
+  PS1='\w> '
+}
+
+set_term_info
+#set_cluster_alias
+get_host_info
+
+HOSTNAME=$TMP_HOST
+#PS1="`hostname`>"
+#PS1='$LOGNAME@$HOSTNAME:$CDPWD> '
+PS1='$LOGNAME@$HOSTNAME> '
+#export PROMPT_COMMAND="`xtitle $PS1`"
+
+alias h='history' # fc -l
+
+alias showusage='/users/dxccwl/user1/ring/work/showusage'
+
+# former VIM settings
+#alias gvi='/users/dxccwm/user4/arzt/bin/decux/vim -g'
+#alias gvi='/users/dxccwm/user4/arzt/vim-5.1/src/decux/vim -g'
+#alias gvi='/users/dxccwl/user1/riechen/migrate/OSF1-V4.0D/bin/vim -g'
+#alias vim='/users/dxccwl/user1/riechen/migrate/OSF1-V4.0D/bin/vim -g'
+#export VIM=$HOME/vim-5.3
+#alias gvi='/appl/local/freeware/bin/vim -g'
+#alias vim='/appl/local/freeware/bin/vim -g'
+#export VIM=/appl/local/freeware/share/vim/vim54
+#alias gvi='/appl/local/freeware/bin/vim -g'
+#alias vim='/appl/local/freeware/bin/vim -g'
+#export VIM=/appl/local/freeware/1.1/share/vim/vim55
+
+#alias vim='/appl/local/freeware/bin/vim53 -g'
+#export VIM=/appl/local/freeware/share/vim
+
+# current VIM settings
+#alias gvi='/appl/local/OpenSource/usr/bin/vim -g'
+
+#alias vim='/appl/local/OpenSource/usr/bin/vim -g'
+#alias vim='$HOME/bin/vim53 -g'
+
+#export VIM=/appl/local/OpenSource/usr/share/vim/vim61
+export VIM=$HOME/bin
+
+# current DISPLAY / VIM settings
+if [ "$DISPLAY" = "" ]
+then
+  export DISPLAY=10.4.62.187:0.0
+  alias vim='/appl/local/OpenSource/4.2/usr/bin/vim -g'
+  alias gvim='/appl/local/OpenSource/4.2/usr/bin/gvim'
+else
+  alias vim='$HOME/bin/vim53 -g'
+  alias gvim='/appl/local/OpenSource/4.2/usr/bin/gvim'
+fi
+
+fncd ()
+{
+    'cd' $*
+    CDPWD=${PWD##$HOME}
+    if [ "$CDPWD" != "$PWD" ]
+    then
+        CDPWD=\~$CDPWD
+    fi
+}
+
+export CDPATH=.:~
+export CDPWD='~'
+
+
+# set PRIVATE environment
+#export PATH=$PATH:$HOME/bin
+#export PATH=$PATH:/users/dxccwm/user2/bartschs/bin
+#export PATH=/users/dxccwm/user2/bartschs/bin:$PATH
+export PATH=/nethome/tmt507/b/bartschs/bin:$PATH
+
+# set environment for ClearCase 
+#export PATH=$PATH:/users/dxccwm/user3/vobadmin/ClearMobil/bin
+#export CMHOME=/users/dxccwm/user3/vobadmin/ClearMobil 
+#export PATH=$PATH:/users/dxccwm/user3/vobadmin/ClearMobil/bin
+export PATH=$PATH:/nethome/tmt508/v/vobadmin/ClearMobil/bin
+#export CMHOME=/users/dxccwm/user3/vobadmin/ClearMobil
+export CMHOME=/nethome/tmt508/v/vobadmin/ClearMobil
+
+#export PATH=$PATH:/appl/local/OpenSource/bin:/appl/local/OpenSource/usr/bin:~g_ratbld/pub/bin
+
+TMP=$HOME/tmp
+export TMP
+
+#LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/appl/local/OpenSource/usr/lib
+#export LD_LIBRARY_PATH
+
+. $HOME/.shfunc
+. $HOME/.oraenv
+

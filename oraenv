@@ -1,0 +1,27 @@
+
+export TWO_TASK=cca03is
+export ORACLE_SID=cca03is
+
+if [ "$HOSTNAME" = "tms1032" ]
+then
+  export ORACLE_HOME=/appl/local/oracle/11.2.0
+else
+  export ORACLE_HOME=/appl/local/oracle/10.2.0
+fi
+
+#export ORACLE_HOME=/appl/local/oracle/9.2.0
+#export ORACLE_HOME=/appl/local/oracle/8.1.7
+
+export INSIGHT_HOME=/appl/local/fastcase/ins++3.1
+export PATH=$PATH:$ORACLE_HOME/bin:/vobs/etc_source/common/bin/integration:$INSIGHT_HOME/bin.alpha4:~arzt/gdbkai:/vobs/com_source/common/src/tfc/bin/decux_debug
+export MANPATH=$MANPATH:$INSIGHT_HOME/man
+export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
+export ORA_CLIENT_LIB=shared
+#export ORA_NLS=$ORACLE_HOME/ocommon/nls/admin/data
+#export ORA_NLS32=$ORACLE_HOME/ocommon/nls/admin/data
+export ORA_NLS33=$ORACLE_HOME/ocommon/nls/admin/data
+
+export TNS_ADMIN=$HOME/network
+export SQLPATH=$HOME/lib
+
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$ORACLE_HOME/lib:$INSIGHT_HOME/lib.alpha4
